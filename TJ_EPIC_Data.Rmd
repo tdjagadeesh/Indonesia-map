@@ -1,0 +1,142 @@
+---
+title: "TJ_EPIC_Data"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#Load packages
+library(tidyverse) #For general data wrangling
+library(viridis) #For color palettes
+library(sf) #For shapefiles
+library(here) #For shapefiles
+library(ggspatial)
+library(tmap)
+
+#Load data
+aqli_raw <- read_csv("aqli_data.csv") 
+```
+
+Section 1: Q1
+```{r}
+#Create a new df with data for the provinces of Java:
+  #Provinces include Jakarta (Jakarta), Banten, West Java (Jawa Barat), Central Java (Jawa Tengah), Yogyakarta             Special Region (Yogyakarta), East Java (Jawa Timur) 
+  #Provincial names obtained from https://www.nationsonline.org/oneworld/map/indonesia_admin_map.htm and verified with     the Indonesia 2010 census https://sp2010.bps.go.id/
+ 
+aqli_java <- aqli_raw %>% #
+  filter(country == "Indonesia") %>%  #Filter data to Indonesia
+  filter(name_1 == "Jakarta Raya" | name_1 == "Banten" | name_1 == "Jawa Barat" | name_1 == "Jawa Tengah" | name_1 == "Yogyakarta" | name_1 =="Jawa Timur")  #Filter data to the 6 provinces of Java 
+
+
+#Create a new df with population-weighted averages of PM2.5 for each year
+java_means <- aqli_java %>% 
+  group_by(name_1) %>% #Group the data by the provinces
+  mutate(pop_weight = (population /sum(population))) %>% #Assign weights to each city in the province by population 
+  summarise_at(vars(pm1998:pm2016),funs(weighted.mean(., pop_weight))) %>% #Calculated the weighted mean for each year 
+  gather("year", "pm", -name_1) %>% #Turn data into tidy format
+  mutate(year = readr::parse_number(year)) #Remove "pm" from year
+
+
+#Create a graph of the mean annual pm2.5 concentrations for each province
+ggplot(java_means, aes(x=year, y=pm, color=name_1)) + 
+    geom_line(size=.5)+
+    scale_color_viridis(discrete = T)+
+    scale_x_continuous(breaks=seq(1998,2016))+ #Change axis breaks
+    scale_y_continuous(breaks=seq(0,35, by = 5))+
+    theme_minimal() +
+    theme(panel.grid.major.x = element_blank(), 
+          panel.grid.minor.x = element_blank(),
+          axis.text.x = element_text(angle = 90, hjust = 1)) +
+    labs(title=(expression(paste("Annual Mean ", PM[2.5], " Concentration in Java, Indonesia by Province, 1998-2016"))),
+         y = expression(paste(PM[2.5], " Concentation ", ("µg" / m^3))),
+         x = "\nYear",
+         colour = "Province")
+
+```
+
+Section 1: Q3
+```{r}
+#Load Indonesia shapefiles
+java_outlines <- read_sf(dsn = here("shapefiles"), layer = "aqli_regions") %>% #Read as sf object
+  filter(name_1 == "Jakarta Raya" | name_1 == "Banten" | name_1 == "Jawa Barat" | name_1 == "Jawa Tengah" | name_1 == "Yogyakarta" | name_1 =="Jawa Timur") #Filter for provinces of interest
+
+#Create a new df from aqli_java which contains only llpp_who_2016 values and join with java_outlines
+java_who <- st_as_sf(aqli_java %>% 
+  select(id, ly_who_2016) %>%  #Select only the columns of interest to merge
+  merge(.,java_outlines, by = "id")) %>%  #Join with java_outlines
+  mutate(ly_cut = cut(ly_who_2016, breaks=c(-0.1, 0.1, 0.5, 1, 2, 3, 4, 5, 6)))
+
+#Create a map
+
+esri_ocean <- paste0('https://services.arcgisonline.com/arcgis/rest/services/',
+                     'Ocean/World_Ocean_Base/MapServer/tile/${z}/${y}/${x}.jpeg')
+
+esri <- paste0('https://server.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/${z}/${y}/${x}.jpeg')
+
+esri2 <- paste0('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{y}/{x}{r}.png')
+
+
+#Interactive map
+jakarta <- 
+  tm_basemap(leaflet::providers$Stamen.Terrain, alpha = 0.5) +
+  tm_shape(java_who) +
+  tm_polygons("ly_cut", 
+              alpha = 0.7, 
+              palette = "-magma", 
+              title = "Gain in life expectancy (years)", 
+              labels = c("0.0 - 0.1", "0.1 - 0.5", "0.5 - 1.0", "1.0 - 2.0", "2.0 - 3.0", "3.0 - 4.0", "4.0 - 5.0", "5.0 - 6.0"),
+              id = "name_2", 
+              popup.vars=c("Province" = "name_1", "Gain in life expectancy (years)"="ly_who_2016")) +
+ tm_layout(title = "Life Expectancy Gained through Reduction of Atmospheric PM2.5 Concentrations to WHO Guidelines in Java, Indonesia") 
+jakarta
+
+
+#Static map
+ggplot() +
+  geom_sf(data = java_who, aes(fill = ly_cut) , size=0, alpha=0.8) +
+  theme_void() +
+  scale_fill_viridis(discrete = T, option = "magma", labels = c("0 - 0.1", "0.1 - 0.5", "0.5 - 1", "1 - 2", "2 - 3"), direction = -1)  +
+  labs( title = "Life Expectancy Gained through Reduction of PM2.5 Concentration to WHO Guideline
+of 10 µg/m^3 in Java, Indonesia by Province") +
+  theme(
+    text = element_text(color = "#22211d"), 
+    panel.background = element_rect(fill = "lightblue", color = NA),  
+    plot.title = element_text(size= 12),
+    legend.title = element_text(size=10),
+    legend.text = element_text(size=10)) +
+  labs(fill = "Gain in life expectancy (years)")
+
+```
+
+Section 2: Q1
+```{r}
+#Create a new df with data for India
+  #Disputed territory: Jammu and Kashmir (controlled by India), Azad Kashmir (controlled by Pakistan)
+  #Source: https://www.bbc.com/news/world-asia-34810086
+ 
+#Find the national population-weighted average for India using de facto territory
+india_defacto <- aqli_raw %>% #
+  filter(country == "India") %>%  #Filter aqli data to India using de facto territory
+  mutate(pop_weight = (population /sum(population))) %>% #Assign weights to each city in the country by population 
+  summarise_at(vars(pm1998:pm2016),funs(weighted.mean(., pop_weight))) #Calculated the weighted mean for each year 
+  #In this scenario, the weighted mean for 2016 is 54.03754
+
+#Find the national population-weighted average for India using what India considers to be its own territory
+india_own <- aqli_raw %>% #
+  filter(country == "India" | country == "Pakistan" & name_1 == "Azad Kashmir") %>%  #Filter aqli data for what India considers to be its own territory
+  mutate(pop_weight = (population /sum(population))) %>% #Assign weights to each city in the country by population 
+  summarise_at(vars(pm1998:pm2016),funs(weighted.mean(., pop_weight))) #Calculated the weighted mean for each year 
+  #In this scenario, the weighted mean for 2016 is 53.98774
+
+#Find the national population-weighted average for India using what India considers to be its own territory
+india_pakistan <- aqli_raw %>% #
+  filter(country == "India" & name_1 != "Jammu and Kashmir") %>%  #Filter aqli data for what Pakistan considers to be India's territory
+  mutate(pop_weight = (population /sum(population))) %>% #Assign weights to each city in the country by population 
+  summarise_at(vars(pm1998:pm2016),funs(weighted.mean(., pop_weight))) #Calculated the weighted mean for each year 
+  #In this scenario, the weighted mean for 2016 is 54.18356
+
+```
+

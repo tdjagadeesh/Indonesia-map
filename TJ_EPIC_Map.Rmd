@@ -1,0 +1,77 @@
+---
+title: "TJ_EPIC_Data"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, echo=FALSE, message = FALSE, results = FALSE, warnning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#Load packages
+library(tidyverse) #For general data wrangling
+library(viridis) #For color palettes
+library(sf) #For shapefiles
+library(here) #For shapefiles
+library(ggspatial)
+library(tmap)
+
+#Load data
+aqli_raw <- read_csv("aqli_data.csv") 
+```
+
+
+```{r, echo = FALSE, message = FALSE, results = FALSE, warning = FALSE, include = FALSE }
+#Create a new df with data for the provinces of Java:
+  #Provinces include Jakarta (Jakarta), Banten, West Java (Jawa Barat), Central Java (Jawa Tengah), Yogyakarta             Special Region (Yogyakarta), East Java (Jawa Timur) 
+  #Provincial names obtained from https://www.nationsonline.org/oneworld/map/indonesia_admin_map.htm and verified with     the Indonesia 2010 census https://sp2010.bps.go.id/
+ 
+aqli_java <- aqli_raw %>% #
+  filter(country == "Indonesia") %>%  #Filter data to Indonesia
+  filter(name_1 == "Jakarta Raya" | name_1 == "Banten" | name_1 == "Jawa Barat" | name_1 == "Jawa Tengah" | name_1 == "Yogyakarta" | name_1 =="Jawa Timur")  #Filter data to the 6 provinces of Java 
+
+
+#Create a new df with population weighted averages of PM2.5 for each year
+java_means <- aqli_java %>% 
+  group_by(name_1) %>% #Group the data by the provinces
+  mutate(pop_weight = (population /sum(population))) %>% #Assign weights to each city in the province by population 
+  summarise_at(vars(pm1998:pm2016),funs(weighted.mean(., pop_weight))) %>% #Calculated the weighted mean for each year 
+  gather("year", "pm", -name_1) %>% #Turn data into tidy format
+  mutate(year = readr::parse_number(year)) #Remove "pm" from year
+
+
+```
+
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+#Load Indonesia shapefiles
+java_outlines <- read_sf(dsn = here("shapefiles"), layer = "aqli_regions") %>% #Read as sf object
+  filter(name_1 == "Jakarta Raya" | name_1 == "Banten" | name_1 == "Jawa Barat" | name_1 == "Jawa Tengah" | name_1 == "Yogyakarta" | name_1 =="Jawa Timur") #Filter for provinces of interest
+
+#Create a new df from aqli_java which contains only llpp_who_2016 values and join with java_outlines
+java_who <- st_as_sf(aqli_java %>% 
+  select(id, ly_who_2016) %>%  #Select only the columns of interest to merge
+  merge(.,java_outlines, by = "id")) %>%  #Join with java_outlines
+  mutate(ly_cut = cut(ly_who_2016, breaks=c(-0.1, 0.1, 0.5, 1, 2, 3, 4, 5, 6)))
+
+
+#Interactive map
+tmap_mode("view")
+indonesia <- 
+  tm_basemap(leaflet::providers$Stamen.Terrain, alpha = 0.5) +
+  tm_shape(java_who) +
+  tm_polygons("ly_cut", 
+              alpha = 0.7, 
+              palette = "-magma", 
+              title = "Gain in life expectancy (years)", 
+              labels = c("0.0 to 0.1", "0.1 to 0.5", "0.5 to 1.0", "1.0 to 2.0", "2.0 to 3.0", "3.0 to 4.0", "4.0 to 5.0", "5.0 to 6.0"),
+              id = "name_2", 
+              popup.vars=c("Province" = "name_1", "Gain in life expectancy (years)"="ly_who_2016")) +
+ tm_layout(title = "Life Expectancy Gained through Reduction of Atmospheric  PM2.5 Concentrations to WHO Guidelines in Java, Indonesia") 
+indonesia
+
+tmap_save(indonesia, "indonesia.html")
+
+
+```
+
